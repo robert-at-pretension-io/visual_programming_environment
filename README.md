@@ -10,8 +10,8 @@ A way to visualize rust projects. Lays the groundwork for encapsulating architec
 1. Ensure you have cargo-make installed. 
     * `cargo install cargo-make`
 2.
-    a. If you want to run this code in a web browser:
+    * If you want to run this code in a web browser:
         * `cargo make serve`
         * go to: http://127.0.0.1:4000
-    b. If you want to run the code natively:
+    * If you want to run the code natively:
         * `cargo make run`
