@@ -29,6 +29,9 @@ rand = "0.7"
 getrandom = {version="0.1", features=["wasm-bindgen"]}
 uuid = "0.8.2"
 petgraph = "0.6.0"
+bevy_egui = "0.6.1"
+strum = { version = "0.21", features = ["derive"] }
+strum_macros = "0.21.1"
 
 # [patch.'https://github.com/bevyengine/bevy']
 # bevy = {git = "https://github.com/bevyengine/bevy//", rev="841755aaf23acfd55b375c37390daeb302c5b30b", default-features=false}
