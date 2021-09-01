@@ -27,5 +27,7 @@ A way to visualize rust projects. Lays the groundwork for encapsulating architec
 | -----: |  :--------  | :-----:  |
 | Learn Bevy | This will be the framework for making client-side UI | :heavy_check_mark: |
 | Compile to wasm | We want the UI to show up in the browser | :heavy_check_mark: |
-| Add egui-bevy | This will be used for immediate graphics (which allows us to practically ignore thought of state management being separate from the application proper) |     |
-| Add toolbox | This will indicate that bevy and egui are playing together nicely |    |
+| Add egui-bevy | This will be used for immediate graphics (which allows us to practically ignore thought of state management being separate from the application proper) | :heavy_check_mark: |
+| Add toolbox | This will indicate that bevy and egui are playing together nicely | :heavy_check_mark: |
+| Add tools | For now the only tools will be the edge and the node (because we are working on creating a graph-based visual editor) |    |
+| Give the tools functionality | While it's nice that tools show up on the screen, they should actually do something :wink: |   |
