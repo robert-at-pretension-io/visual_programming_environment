@@ -6,15 +6,17 @@ use uuid::Uuid;
 use bevy_egui::{egui, EguiContext, EguiPlugin, EguiSettings};
 use strum::IntoEnumIterator; // 0.17.1
 use strum_macros::EnumIter; // 0.17.1
+
 use std::collections::HashMap;
 
 
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::{*};
 
-struct PotentialNode {
+struct Icon {
     position: Position,
     label : String,
+    current_tool : Tools
 }
 
 struct Position {
@@ -24,10 +26,11 @@ struct Position {
 }
 
 struct HandleMaterialMap {
-    tools: HashMap<SelectedTool,Handle<ColorMaterial>>,
+    tools: HashMap<Tools,Handle<ColorMaterial>>,
     length : f32,
     height: f32
 }
+
 
 
 struct Node {
@@ -41,77 +44,68 @@ impl Node {
     }
 }
 
-fn spawn_node(mut commands : Commands, materials : Res<NodeMaterial>) {
+// fn spawn_node(mut commands : Commands, materials : Res<NodeMaterial>) {
     
-    // let local_materials = materials.deref().clone();
-    commands
-        .spawn_bundle(SpriteBundle {
-            sprite: Sprite::new(Vec2::new(materials.length, materials.height)),
-            material: materials.placed_color.clone(),
-            ..Default::default()
-        })
-        .insert(Node::new());
-}
+//     // let local_materials = materials.deref().clone();
+//     commands
+//         .spawn_bundle(SpriteBundle {
+//             sprite: Sprite::new(Vec2::new(materials.length, materials.height)),
+//             material: materials.placed_color.clone(),
+//             ..Default::default()
+//         })
+//         .insert(Node::new());
+// }
 
-fn change_tool(selected_tool : Res<SelectedTool>) {
+fn change_tool(mut query : Query<(&mut Visible, &mut Handle<ColorMaterial>), With<Icon>>, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>    ) {
+    if tool_history.is_changed() {
+
+        info!("The tool history has been changed.");
+
+        if let Ok((mut visible,  mut handle )) = query.single_mut() {
+            info!("Got the sprite!");
+            if let Some(current_material) = handle_map.tools.get(&tool_history.current_tool) {
+                info!("making the sprite bundle visible and changing the color material (hopefully)");
+                
+                visible.is_transparent = false;
+                visible.is_visible = true;
+                *handle = current_material.to_owned();
+            }
+            
+        }
+    }
+    // info!("The change_tool system has been triggered.");
     
+
+
 }
 
 //bevy::math::f32::Vec3
-fn place_node(windows: Res<Windows>, mut commands : Commands, materials : Res<NodeMaterial>, mut query : Query<(&PotentialNode, &mut Transform)>, selected_tool : Res<SelectedTool>) {
+fn place_node(windows: Res<Windows>,  mut query : Query<(&Icon, &mut Transform)>) {
+
+    
+
     let window = windows.get_primary().unwrap();
     let adjust_x = window.width()/2.0;
     let adjust_y = window.height()/2.0;
-    match selected_tool {
-        SelectedTool::Empty => todo!(),
-        SelectedTool::Node => todo!(),
-        SelectedTool::Edge => todo!(),
-    }
-
-    let mut count = 0;
+    
     for (_potential_node, mut transform) in query.iter_mut() {
-        count = count + 1;
             // If the node is already existing on the screen somewhere, we should transform it to the position of the mouse! Instead of iterating through... There should only be one potential node on the screen at once.
     
             if let Some(position) = window.cursor_position() {
+
+
                 let x = position.x.to_owned() - adjust_x;
                 let y = position.y.to_owned() - adjust_y;
                 // cursor is inside the window, position given
-    
+
+                
+                // info!("The cursor is at the postion: x: {}, y: {}",x,y);
                 // Update the position of the sprite
                 transform.translation.x = x;
                 transform.translation.y = y;
             } 
     }
 
-    if count == 0 {
-            // The potential node has not been added to the resources available to bevy! We need to add the potential node to the resource repository
-    
-            if let Some(position) = window.cursor_position() {
-                let x = position.x.to_owned() - adjust_x;
-                let y = position.y.to_owned() - adjust_y;
-                // cursor is inside the window, position given
-                commands.spawn_bundle(SpriteBundle{
-                    sprite: Sprite::new(Vec2::new(materials.length, materials.height)),
-                    material: materials.potential_color.clone(),
-                    transform: Transform{
-                        translation: Vec3::new(x, y, 0.0),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }).insert(PotentialNode{
-                    position: Position{x,y,z:0.0},
-                    label: String::from("Potential Node"),
-                });
-    
-            } else {
-                // cursor is not inside the window and so we will not yet spawn the resource... Because there's no sensible place to put it :'(
-            }
-    }
-
-    
-
-    
 
     
 }
@@ -119,31 +113,37 @@ fn place_node(windows: Res<Windows>, mut commands : Commands, materials : Res<No
 struct Graph(UnGraph<Node, ()>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
-enum SelectedTool {
+enum Tools {
 Empty,
 Node,
 Edge
 }
 
+struct ToolHistory{
+    current_tool : Tools,
+    last_tool : Option<Tools>
+}
+
 
 pub fn main() {
-    //   When building for WASM, print panics to the browser console
-    //   #[cfg(target_arch = "wasm32")]
-    //   console_error_panic_hook::set_once();
 
     let mut app = App::build();
     
     app
         .add_plugins(bevy::DefaultPlugins)
         .add_plugin(EguiPlugin)
-        .insert_resource(SelectedTool::Empty)
+        .insert_resource(ToolHistory{
+            current_tool: Tools::Empty,
+            last_tool: None,
+        })
         .add_startup_system(setup.system().label("first"))
         .add_system_set(
             SystemSet::new()
                 .after("first")
                 .with_system(place_node.system()))
 
-        .add_system(tool_menu.system());
+        .add_system(tool_menu.system())
+        .add_system(change_tool.system());
     
     // when building for Web, use WebGL2 rendering
     #[cfg(target_arch = "wasm32")]
@@ -158,25 +158,45 @@ fn setup(mut commands : Commands, mut materials : ResMut<Assets<ColorMaterial>>)
     commands.spawn_bundle(OrthographicCameraBundle::new_2d() );
     // commands.insert_resource(Graph(UnGraph::new().add_node(Node::new())))
 let mut handle_map : HandleMaterialMap = HandleMaterialMap {
-    tools : HashMap<SelectedTool,Handle<ColorMaterial>>::new(),
+    tools : HashMap::new(),
     length : 10.0,
     height: 10.0
 };
 
+commands.spawn_bundle(SpriteBundle{
+    sprite: Sprite::new(Vec2::new(handle_map.length, handle_map.height)),
+    visible: Visible {
+        is_visible: false,
+        is_transparent: false,
+    },
+    transform: Transform{
+        translation: Vec3::new(0.0, 0.0, 0.0),
+        ..Default::default()
+    },
+    ..Default::default()
+}).insert(Icon{
+    position: Position{x :0.0,y:0.0,z:0.0},
+    label: String::from("Potential Node"),
+    current_tool : Tools::Empty
+});
+
 // for each of the potentially selected tools, let's insert a resource to represent that tool. Using this construction will guarantee that the system will not compile unless there is an allocated resource for each of the tools.
-for variant in SelectedTool.iter() {
+for variant in Tools::iter() {
     match variant {
-        SelectedTool::Edge => {
+        Tools::Edge => {
             let handle = materials.add(ColorMaterial::color(Color::BLACK));
-            handle_map.tools.insert(SelectedTool::Edge, handle);
+            handle_map.tools.insert(Tools::Edge, handle.clone());
+            
         }
-        SelectedTool::Empty => {
-            let handle = materials.add(ColorMaterial::color(Color::Hsla(0.0,0.0,0.0,0.0)));
-            handle_map.tools.insert(SelectedTool::Edge, handle);
+        Tools::Empty => {
+        let handle = materials.add(ColorMaterial::color(Color::Hsla{ hue: 0.0   , saturation: 0.0, lightness: 0.0, alpha: 0.0  }));
+            handle_map.tools.insert(Tools::Empty, handle.clone());
+            
         }
-        SelectedTool::Node => {
+        Tools::Node => {
             let handle = materials.add(ColorMaterial::color(Color::GREEN));
-            handle_map.tools.insert(SelectedTool::Edge, handle);
+            handle_map.tools.insert(Tools::Node, handle.clone());
+            
         }
         
     }
@@ -212,14 +232,16 @@ pub fn update_ui_scale_factor(
 // Note the usage of `ResMut`. Even though `ctx` method doesn't require
 // mutability, accessing the context from different threads will result
 // into panic if you don't enable `egui/multi_threaded` feature.
-fn tool_menu(egui_context: ResMut<EguiContext>, mut selected_tool : ResMut<SelectedTool>) {
+fn tool_menu(egui_context: ResMut<EguiContext>, mut tool_history : ResMut<ToolHistory>) {
     egui::Window::new("Toolbox").show(egui_context.ctx(), |ui| {
         let node_button = ui.add(
             egui::Button::new("Node Tool")
         
         );
         if node_button.clicked() {
-                *selected_tool = SelectedTool::Node;
+                let last_tool = tool_history.current_tool.clone();
+                tool_history.current_tool = Tools::Node;
+                tool_history.last_tool = Some(last_tool);
                 bevy::log::info!("Selected the node tool!");
             
         };
@@ -228,7 +250,9 @@ fn tool_menu(egui_context: ResMut<EguiContext>, mut selected_tool : ResMut<Selec
         
         );
         if edge_button.clicked() {
-                *selected_tool = SelectedTool::Edge;
+            let last_tool = tool_history.current_tool.clone();
+            tool_history.current_tool = Tools::Edge;
+            tool_history.last_tool = Some(last_tool);
                 bevy::log::info!("Selected the edge tool!");
             
         };
