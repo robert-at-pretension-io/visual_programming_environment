@@ -9,6 +9,8 @@ use strum_macros::EnumIter; // 0.17.1
 
 use std::collections::HashMap;
 
+use bevy_mod_bounding::{obb, debug, *};
+
 
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::{*};
@@ -26,16 +28,14 @@ struct Position {
 }
 
 struct HandleMaterialMap {
-    tools: HashMap<Tools,Handle<ColorMaterial>>,
+    tools: HashMap<Tools,Handle<StandardMaterial>>,
     length : f32,
     height: f32
 }
 
-
-
 struct Node {
     identity : uuid::Uuid,
-    label : String
+    label : String,
 }
 
 impl Node {
@@ -44,25 +44,13 @@ impl Node {
     }
 }
 
-// fn spawn_node(mut commands : Commands, materials : Res<NodeMaterial>) {
-    
-//     // let local_materials = materials.deref().clone();
-//     commands
-//         .spawn_bundle(SpriteBundle {
-//             sprite: Sprite::new(Vec2::new(materials.length, materials.height)),
-//             material: materials.placed_color.clone(),
-//             ..Default::default()
-//         })
-//         .insert(Node::new());
-// }
-
-fn change_tool(mut query : Query<(&mut Visible, &mut Handle<ColorMaterial>), With<Icon>>, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>    ) {
+fn change_tool(mut query : Query<(&mut Visible, &mut Handle<StandardMaterial>), With<Icon>>, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>    ) {
     if tool_history.is_changed() {
 
         info!("The tool history has been changed.");
 
         if let Ok((mut visible,  mut handle )) = query.single_mut() {
-            info!("Got the sprite!");
+            info!("Got the pbr object!");
             if let Some(current_material) = handle_map.tools.get(&tool_history.current_tool) {
                 info!("making the sprite bundle visible and changing the color material (hopefully)");
                 
@@ -81,8 +69,6 @@ fn change_tool(mut query : Query<(&mut Visible, &mut Handle<ColorMaterial>), Wit
 
 //bevy::math::f32::Vec3
 fn place_node(windows: Res<Windows>,  mut query : Query<(&Icon, &mut Transform)>) {
-
-    
 
     let window = windows.get_primary().unwrap();
     let adjust_x = window.width()/2.0;
@@ -132,6 +118,7 @@ pub fn main() {
     app
         .add_plugins(bevy::DefaultPlugins)
         .add_plugin(EguiPlugin)
+        .add_plugin(BoundingVolumePlugin::<obb::Obb>::default())
         .insert_resource(ToolHistory{
             current_tool: Tools::Empty,
             last_tool: None,
@@ -149,12 +136,27 @@ pub fn main() {
     #[cfg(target_arch = "wasm32")]
     app.add_plugin(bevy_webgl2::WebGL2Plugin);
     
-    
-
     app.run();
 }
+/// This is a tag indicating the entities within the environment that have been placed on the grid.
+struct Placed;
 
-fn setup(mut commands : Commands, mut materials : ResMut<Assets<ColorMaterial>>) {
+fn check_what_is_clicked(egui_context: ResMut<EguiContext>, buttons: Res<Input<MouseButton>>, query : Query<&Placed>, window : Res<Windows>) {
+    if buttons.just_pressed(MouseButton::Left) {
+        // Left button was pressed
+        // check what was clicked by having a query that looks up everything with a position
+
+
+        let window = window.get_primary().unwrap();
+        let position = window.cursor_position().unwrap();
+        
+        info!("The window was clicked at: (x,y) : ({},{})", position.x, position.y);
+    }
+
+
+}
+
+fn setup(mut commands : Commands, mut materials : ResMut<Assets<StandardMaterial>>,     mut meshes: ResMut<Assets<Mesh>>,) {
     commands.spawn_bundle(OrthographicCameraBundle::new_2d() );
     // commands.insert_resource(Graph(UnGraph::new().add_node(Node::new())))
 let mut handle_map : HandleMaterialMap = HandleMaterialMap {
@@ -163,8 +165,11 @@ let mut handle_map : HandleMaterialMap = HandleMaterialMap {
     height: 10.0
 };
 
-commands.spawn_bundle(SpriteBundle{
-    sprite: Sprite::new(Vec2::new(handle_map.length, handle_map.height)),
+commands.spawn_bundle(PbrBundle{
+    // sprite: Sprite::new(Vec2::new(handle_map.length, handle_map.height)),
+    mesh: meshes.add(Mesh::from(shape::Cube{
+        size: handle_map.length,
+    })),
     visible: Visible {
         is_visible: false,
         is_transparent: false,
@@ -176,25 +181,44 @@ commands.spawn_bundle(SpriteBundle{
     ..Default::default()
 }).insert(Icon{
     position: Position{x :0.0,y:0.0,z:0.0},
-    label: String::from("Potential Node"),
+    label: String::from("Cursor"),
     current_tool : Tools::Empty
-});
+})
+.insert(Bounded::<obb::Obb>::default())
+.insert(debug::DebugBounds);
 
 // for each of the potentially selected tools, let's insert a resource to represent that tool. Using this construction will guarantee that the system will not compile unless there is an allocated resource for each of the tools.
 for variant in Tools::iter() {
     match variant {
         Tools::Edge => {
-            let handle = materials.add(ColorMaterial::color(Color::BLACK));
+            let handle = materials.add(StandardMaterial{
+                base_color: Color::Rgba{ red: 1.0, green: 0.0, blue: 0.0, alpha: 0.5 },
+                roughness: 0.7,
+                metallic: 0.7,
+                ..Default::default()
+            });
             handle_map.tools.insert(Tools::Edge, handle.clone());
             
         }
         Tools::Empty => {
-        let handle = materials.add(ColorMaterial::color(Color::Hsla{ hue: 0.0   , saturation: 0.0, lightness: 0.0, alpha: 0.0  }));
+            let handle = materials.add(StandardMaterial{
+                base_color: Color::Rgba{ red: 0.0, green: 1.0, blue: 0.0, alpha: 0.5 },
+                roughness: 0.7,
+                metallic: 0.7,
+                ..Default::default()
+            });
             handle_map.tools.insert(Tools::Empty, handle.clone());
             
         }
         Tools::Node => {
-            let handle = materials.add(ColorMaterial::color(Color::GREEN));
+            let handle = materials.add(StandardMaterial{
+                base_color: Color::Rgba{ red: 0.0, green: 0.0, blue: 1.0, alpha: 0.5 },
+                roughness: 0.7,
+                metallic: 0.7,
+                unlit: false,
+                ..Default::default()
+                
+            });
             handle_map.tools.insert(Tools::Node, handle.clone());
             
         }
