@@ -31,6 +31,8 @@ A way to visualize rust projects. Lays the groundwork for encapsulating architec
 | Add toolbox | This will indicate that bevy and egui are playing together nicely | :heavy_check_mark: |
 | Add tools | For now the only tools will be the edge and the node (because we are working on creating a graph-based visual editor) | :heavy_check_mark: |
 | System aware of new tools | Making the tool into an enum allows us to guarantee that all tools are added at the correct touchpoints of the application | :heavy_check_mark: |
-| Give the tools functionality | While it's nice that tools show up on the screen, they should actually do something :wink: |   |
-| Determine what mouse-click hitting | Since there are theoretically many different tools available, the screen will one day be filled with different entities -- all of which will have different methods of interaction. So, it'll be important to differentiate what is being clicked... |    |
-| (Tool, ClickedComponent) functionality |  Each unique (Tool, ClickedComponent) tuple could have different functionality, the functionality given to each should be easy to specify. |    | 
+| Give the tools functionality | While it's nice that tools show up on the screen, they should actually do something :wink: | 
+:heavy_check_mark: |
+| Determine what mouse-click hitting | Since there are theoretically many different tools available, the screen will one day be filled with different entities -- all of which will have different methods of interaction. So, it'll be important to differentiate what is being clicked... | :heavy_check_mark: |
+| (Tool, ClickedComponent) functionality |  Each unique (Tool, ClickedComponent) tuple could have different functionality, the functionality given to each should be easy to specify. | *in progress* | 
+| Change the bounding box to a rectangle |  When the nodes change size, it will make a lot more sense to have bounding boxes instead of circles since the circular clickbox will potentially be huge for long rectangle nodes |    |
