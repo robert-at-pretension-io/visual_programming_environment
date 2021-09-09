@@ -9,15 +9,14 @@ use strum_macros::EnumIter; // 0.17.1
 
 use std::collections::HashMap;
 
-use bevy_mod_bounding::{obb, debug, *};
+use bevy_mod_bounding::{sphere::BSphere, debug, *};
+use bevy_inspector_egui::WorldInspectorPlugin;
 
 
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::{*};
 
 struct Icon {
-    position: Position,
-    label : String,
     current_tool : Tools
 }
 
@@ -44,12 +43,12 @@ impl Node {
     }
 }
 
-fn change_tool(mut query : Query<(&mut Visible, &mut Handle<StandardMaterial>), With<Icon>>, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>    ) {
+fn change_tool(mut query : Query<(&mut Visible, &mut Handle<StandardMaterial>, &mut Mesh), With<Icon>>, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>    ) {
     if tool_history.is_changed() {
 
         info!("The tool history has been changed.");
 
-        if let Ok((mut visible,  mut handle )) = query.single_mut() {
+        if let Ok((mut visible,  mut handle, mut mesh)) = query.single_mut() {
             info!("Got the pbr object!");
             if let Some(current_material) = handle_map.tools.get(&tool_history.current_tool) {
                 info!("making the sprite bundle visible and changing the color material (hopefully)");
@@ -57,6 +56,7 @@ fn change_tool(mut query : Query<(&mut Visible, &mut Handle<StandardMaterial>), 
                 visible.is_transparent = false;
                 visible.is_visible = true;
                 *handle = current_material.to_owned();
+                // Todo: change the other properties of the tools here... For instance, make the empty tool smaller. Probably I'll want to change the HandleMaterialMap to potentially have more properties to edit. I could also store a custom pbr bundle in each of the values of the map instead of the standard material. This would add complete customizability
             }
             
         }
@@ -67,29 +67,41 @@ fn change_tool(mut query : Query<(&mut Visible, &mut Handle<StandardMaterial>), 
 
 }
 
-//bevy::math::f32::Vec3
-fn place_node(windows: Res<Windows>,  mut query : Query<(&Icon, &mut Transform)>) {
+fn adjust_cursor_position(window : &Res<Windows>) -> Option<(f32, f32)> {
+    let window = window.get_primary().unwrap();
 
-    let window = windows.get_primary().unwrap();
-    let adjust_x = window.width()/2.0;
+    
+
+    let mut adjust_x : f32 = window.width()/2.0;
     let adjust_y = window.height()/2.0;
     
+
+    
+    if let Some(position) = window.cursor_position() {
+        let mut x = position.x;
+        let mut y = position.y;
+        x = x - adjust_x;
+        y = y - adjust_y;
+        return Some((x,y));
+    }
+    return None
+}
+
+//bevy::math::f32::Vec3
+fn change_cursor_position(windows: Res<Windows>,  mut query : Query<(&Icon, &mut Transform)>) {
     for (_potential_node, mut transform) in query.iter_mut() {
             // If the node is already existing on the screen somewhere, we should transform it to the position of the mouse! Instead of iterating through... There should only be one potential node on the screen at once.
     
-            if let Some(position) = window.cursor_position() {
+        
+                if let Some((x,y)) = adjust_cursor_position(&windows){
+                    // info!("The cursor is at the postion: x: {}, y: {}",x,y);
+                    // Update the position of the sprite
+                    transform.translation.x = x;
+                    transform.translation.y = y;
+                } 
+   
 
-
-                let x = position.x.to_owned() - adjust_x;
-                let y = position.y.to_owned() - adjust_y;
-                // cursor is inside the window, position given
-
-                
-                // info!("The cursor is at the postion: x: {}, y: {}",x,y);
-                // Update the position of the sprite
-                transform.translation.x = x;
-                transform.translation.y = y;
-            } 
+ 
     }
 
 
@@ -117,20 +129,20 @@ pub fn main() {
     
     app
         .add_plugins(bevy::DefaultPlugins)
+        .add_plugin(WorldInspectorPlugin::new())
         .add_plugin(EguiPlugin)
-        .add_plugin(BoundingVolumePlugin::<obb::Obb>::default())
+        .add_plugin(BoundingVolumePlugin::<sphere::BSphere>::default())
+        // .add_plugin(BoundingVolumePlugin::<obb::Obb>::default())
         .insert_resource(ToolHistory{
             current_tool: Tools::Empty,
             last_tool: None,
         })
-        .add_startup_system(setup.system().label("first"))
-        .add_system_set(
-            SystemSet::new()
-                .after("first")
-                .with_system(place_node.system()))
-
+        .insert_resource(LastPlacedEntity(None))
+        .add_startup_system(setup.system())
+        .add_system(change_cursor_position.system())
         .add_system(tool_menu.system())
-        .add_system(change_tool.system());
+        .add_system(change_tool.system())
+        .add_system(check_what_is_clicked.system());
     
     // when building for Web, use WebGL2 rendering
     #[cfg(target_arch = "wasm32")]
@@ -139,21 +151,98 @@ pub fn main() {
     app.run();
 }
 /// This is a tag indicating the entities within the environment that have been placed on the grid.
-struct Placed;
+#[derive(Debug)]
+struct Placed{
+    x : f32,
+    y: f32,
+    z: f32
+}
 
-fn check_what_is_clicked(egui_context: ResMut<EguiContext>, buttons: Res<Input<MouseButton>>, query : Query<&Placed>, window : Res<Windows>) {
+struct LastPlacedEntity(Option<Entity>);
+
+fn place_icon(current_tool : Tools , handle_map : ResMut<HandleMaterialMap>, mut commands : Commands, window : Res<Windows>,  mut meshes: ResMut<Assets<Mesh>>) {
+    if let Some(material) = handle_map.tools.get(&current_tool.clone()){
+        
+                        if let Some((x,y)) = adjust_cursor_position(&window) {
+
+                            info!("Should be placing {:?} at {} {}", current_tool, x, y);
+                            commands.spawn_bundle(
+                                PbrBundle{
+                                    visible : Visible {
+                                        is_visible: true,
+                                        is_transparent: false,
+                                    },
+                                    mesh: meshes.add(
+                                        Mesh::from(shape::Cube{
+                                            size: handle_map.length
+                                        })
+                                    ),
+                                    material : material.clone().to_owned(),
+                                    transform: Transform::from_xyz(x.clone(), y.clone(), 0.0),
+                                    ..Default::default()
+                                }
+                            )
+                            .insert(Placed{x,y, z: 0.0}
+                            )
+                            .insert(Bounded::<sphere::BSphere>::default())
+                            .insert(debug::DebugBounds);           
+                        }
+
+
+
+    }
+}
+
+fn check_what_is_clicked(egui_context: ResMut<EguiContext>, buttons: Res<Input<MouseButton>>, query : Query<(Entity, &Placed, &BSphere)>, window : Res<Windows>, commands : Commands, handle_map : ResMut<HandleMaterialMap>, tool_history: ResMut<ToolHistory>  , meshes: ResMut<Assets<Mesh>>, mut last_entity : ResMut<LastPlacedEntity>) {
     if buttons.just_pressed(MouseButton::Left) {
         // Left button was pressed
         // check what was clicked by having a query that looks up everything with a position
+        let primary_window = window.get_primary().unwrap();
+        if let Some(position) = primary_window.cursor_position() {
+            if egui_context.ctx().is_pointer_over_area() {
+                info!("Also clicked on a egui window, shouldn't try placing an icon.");
+            }
+            else {
+                let current_tool = tool_history.current_tool.clone();
 
+                    match current_tool.clone() {
+                        Tools::Empty => {
+                            for (entity, placed, bounded) in query.iter() {
 
-        let window = window.get_primary().unwrap();
-        let position = window.cursor_position().unwrap();
-        
-        info!("The window was clicked at: (x,y) : ({},{})", position.x, position.y);
+                                if let Some(cursor) = adjust_cursor_position(&window){
+
+                                    // info!("mouse info: {:?}\nbounded info: {:?}\nplaced info: {:?}", cursor, bounded, placed);
+
+                                    let mesh_radius = bounded.mesh_space_radius();
+
+                                    let (cursor_x, cursor_y) = cursor;
+                                    let mouse_position = Vec3::new(cursor_x, cursor_y,0.0);
+                                    let placed_position = Vec3::new(placed.x, placed.y, 0.0);
+                                    
+                                    if mouse_position.distance(placed_position) < *mesh_radius {
+                                        info!("I should select the icon here. It is represented by the entity {:?}", entity);
+                                        *last_entity = LastPlacedEntity(Some(entity.clone()));
+                                    }
+                                }
+
+                                 
+                            }
+                        },
+                        Tools::Node => {
+                            info!("The window was clicked at: (x,y) : ({},{})", position.x, position.y);
+                            place_icon(current_tool,handle_map,commands,window, meshes);
+                        },
+                        Tools::Edge => {                
+
+                        },
+                    }
+
+    
+        }
     }
 
 
+}
 }
 
 fn setup(mut commands : Commands, mut materials : ResMut<Assets<StandardMaterial>>,     mut meshes: ResMut<Assets<Mesh>>,) {
@@ -161,8 +250,8 @@ fn setup(mut commands : Commands, mut materials : ResMut<Assets<StandardMaterial
     // commands.insert_resource(Graph(UnGraph::new().add_node(Node::new())))
 let mut handle_map : HandleMaterialMap = HandleMaterialMap {
     tools : HashMap::new(),
-    length : 10.0,
-    height: 10.0
+    length : 30.0,
+    height: 17.0
 };
 
 commands.spawn_bundle(PbrBundle{
@@ -171,7 +260,7 @@ commands.spawn_bundle(PbrBundle{
         size: handle_map.length,
     })),
     visible: Visible {
-        is_visible: false,
+        is_visible: true,
         is_transparent: false,
     },
     transform: Transform{
@@ -180,12 +269,20 @@ commands.spawn_bundle(PbrBundle{
     },
     ..Default::default()
 }).insert(Icon{
-    position: Position{x :0.0,y:0.0,z:0.0},
-    label: String::from("Cursor"),
+    
     current_tool : Tools::Empty
-})
-.insert(Bounded::<obb::Obb>::default())
-.insert(debug::DebugBounds);
+});
+
+
+// Oh, right, pbr requires light :shocked_pichachu:
+commands.spawn_bundle(LightBundle {
+    transform: Transform::from_translation(Vec3::new(4.0, 8.0, 4.0)),
+    light: Light{
+        intensity: 1.0,
+        ..Default::default()
+    },
+    ..Default::default()
+});
 
 // for each of the potentially selected tools, let's insert a resource to represent that tool. Using this construction will guarantee that the system will not compile unless there is an allocated resource for each of the tools.
 for variant in Tools::iter() {
@@ -202,9 +299,10 @@ for variant in Tools::iter() {
         }
         Tools::Empty => {
             let handle = materials.add(StandardMaterial{
-                base_color: Color::Rgba{ red: 0.0, green: 1.0, blue: 0.0, alpha: 0.5 },
+                base_color: Color::Rgba{ red: 0.0, green: 1.0, blue: 0.0, alpha: 0.0 },
                 roughness: 0.7,
                 metallic: 0.7,
+                unlit : false,
                 ..Default::default()
             });
             handle_map.tools.insert(Tools::Empty, handle.clone());
@@ -258,17 +356,37 @@ pub fn update_ui_scale_factor(
 // into panic if you don't enable `egui/multi_threaded` feature.
 fn tool_menu(egui_context: ResMut<EguiContext>, mut tool_history : ResMut<ToolHistory>) {
     egui::Window::new("Toolbox").show(egui_context.ctx(), |ui| {
-        let node_button = ui.add(
-            egui::Button::new("Node Tool")
         
-        );
-        if node_button.clicked() {
-                let last_tool = tool_history.current_tool.clone();
-                tool_history.current_tool = Tools::Node;
-                tool_history.last_tool = Some(last_tool);
-                bevy::log::info!("Selected the node tool!");
-            
-        };
+        for variant in Tools::iter() {
+            match variant {
+                Tools::Empty => {
+                    let node_button = ui.add(
+                        egui::Button::new("Selector Tool")
+                    
+                    );
+                    if node_button.clicked() {
+                            let last_tool = tool_history.current_tool.clone();
+                            tool_history.current_tool = Tools::Empty;  
+                            tool_history.last_tool = Some(last_tool);
+                            bevy::log::info!("Selected the selector tool!");
+                        
+                    };
+                },
+                Tools::Node => {
+                    let node_button = ui.add(
+                        egui::Button::new("Node Tool")
+                    
+                    );
+                    if node_button.clicked() {
+                            let last_tool = tool_history.current_tool.clone();
+                            tool_history.current_tool = Tools::Node;
+                            tool_history.last_tool = Some(last_tool);
+                            bevy::log::info!("Selected the node tool!");
+                        
+                    };
+                },
+                Tools::Edge => {
+                    
         let edge_button = ui.add(
             egui::Button::new("Edge Tool")
         
@@ -280,6 +398,12 @@ fn tool_menu(egui_context: ResMut<EguiContext>, mut tool_history : ResMut<ToolHi
                 bevy::log::info!("Selected the edge tool!");
             
         };
+                },
+            }
+        }
+        
+        
+
 
     });
 }
