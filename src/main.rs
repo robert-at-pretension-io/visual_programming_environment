@@ -7,7 +7,7 @@ use petgraph::graph::UnGraph;
 use strum::IntoEnumIterator; // 0.17.1
 use strum_macros::EnumIter;
 use uuid::Uuid; // 0.17.1
-use Either::Left;
+use Either::{Left, Right};
 
 use std::collections::HashMap;
 
@@ -17,10 +17,11 @@ use bevy_mod_bounding::{debug, sphere::BSphere, *};
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::*;
 
-struct Icon {
+struct Cursor {
     current_tool: Tools,
 }
 
+#[derive(Debug)]
 struct Position {
     x: f32,
     y: f32,
@@ -47,8 +48,69 @@ impl Node {
     }
 }
 
+struct Graph(UnGraph<Node, ()>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
+enum Tools {
+    Selector,
+    Node,
+    Edge,
+}
+
+type EntityType = Tools;
+
+struct ToolHistory {
+    current_tool: Tools,
+    last_tool: Option<Tools>,
+}
+
+/// This struct will allow the application to implement undo capabilities at some point in the future. Presently, it is used for determining if tools requiring more than one click are complete in their task. For instance, if a `Tools::Edge` interacts with a node, we want to know if this is the second time this has taken place -- indicating that an edge should connect the two nodes.
+struct InteractionHistory {
+    /// The first optional tuple represents the entity (and its corresponding type) that has been clicked by the Tool.
+    history: Vec<Either<(Option<(Entity, EntityType)>, Tools), ActionTaken>>,
+}
+/// This fella represents the case in which case an interaction has been parsed and enacted. This will make it so that the next interaction doesn't read past interactions that have already been placed. For instance, in the case that the edge tool is selected and three different nodes A, B and then C are clicked. Without adding the ActionTaken to the interaction history, an edge would be added between A and B and then also an edge between B and C. This is not the desired behavior. When the enact_interaction system is triggered, it will add this struct to the `InteractionHistory`.
+struct ActionTaken;
+
+/// This is a tag indicating the entities within the environment that have been placed on the grid.
+#[derive(Debug)]
+struct Placed {
+    position: Position,
+    entity_type: Tools,
+}
+
+pub fn main() {
+    let mut app = App::build();
+
+    app.add_plugins(bevy::DefaultPlugins)
+        .add_plugin(WorldInspectorPlugin::new())
+        .add_plugin(EguiPlugin)
+        .add_plugin(BoundingVolumePlugin::<sphere::BSphere>::default())
+        // .add_plugin(BoundingVolumePlugin::<obb::Obb>::default())
+        .insert_resource(ToolHistory {
+            current_tool: Tools::Selector,
+            last_tool: None,
+        })
+        .insert_resource(InteractionHistory {
+            history: Vec::new(),
+        })
+        // .insert_resource(LastClickedEntity(None))
+        .add_startup_system(setup.system())
+        .add_system(change_cursor_position.system())
+        .add_system(tool_menu.system())
+        .add_system(change_tool.system())
+        .add_system(check_what_is_clicked.system())
+        .add_system(enact_interaction.system());
+
+    // when building for Web, use WebGL2 rendering
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugin(bevy_webgl2::WebGL2Plugin);
+
+    app.run();
+}
+
 fn change_tool(
-    mut query: Query<(&mut Visible, &mut Handle<StandardMaterial>, &mut Mesh), With<Icon>>,
+    mut query: Query<(&mut Visible, &mut Handle<StandardMaterial>, &mut Mesh), With<Cursor>>,
     handle_map: ResMut<HandleMaterialMap>,
     tool_history: ResMut<ToolHistory>,
 ) {
@@ -89,7 +151,7 @@ fn adjust_cursor_position(window: &Res<Windows>) -> Option<(f32, f32)> {
 }
 
 //bevy::math::f32::Vec3
-fn change_cursor_position(windows: Res<Windows>, mut query: Query<(&Icon, &mut Transform)>) {
+fn change_cursor_position(windows: Res<Windows>, mut query: Query<(&Cursor, &mut Transform)>) {
     for (_potential_node, mut transform) in query.iter_mut() {
         // If the node is already existing on the screen somewhere, we should transform it to the position of the mouse! Instead of iterating through... There should only be one potential node on the screen at once.
 
@@ -102,87 +164,82 @@ fn change_cursor_position(windows: Res<Windows>, mut query: Query<(&Icon, &mut T
     }
 }
 
-struct Graph(UnGraph<Node, ()>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
-enum Tools {
-    Selector,
-    Node,
-    Edge,
-}
-
-type EntityType = Tools;
-
-struct ToolHistory {
-    current_tool: Tools,
-    last_tool: Option<Tools>,
-}
-
-/// This struct will allow the application to implement undo capabilities at some point in the future. Presently, it is used for determining if tools requiring more than one click are complete in their task. For instance, if a `Tools::Edge` interacts with a node, we want to know if this is the second time this has taken place -- indicating that an edge should connect the two nodes.
-struct InteractionHistory {
-    /// The first optional tuple represents the entity (and its corresponding type) that has been clicked by the Tool.
-    history: Vec<Either<(Option<(Entity, EntityType)>, Tools), ActionTaken>>,
-}
-/// This fella represents the case in which case an interaction has been parsed and enacted. This will make it so that the next interaction doesn't read past interactions that have already been placed. For instance, in the case that the edge tool is selected and three different nodes A, B and then C are clicked. Without adding the ActionTaken to the interaction history, an edge would be added between A and B and then also an edge between B and C. This is not the desired behavior. When the enact_interaction system is triggered, it will add this struct to the `InteractionHistory`.
-struct ActionTaken;
-
-/// This is a tag indicating the entities within the environment that have been placed on the grid.
-#[derive(Debug)]
-struct Placed {
-    position: Position,
-    entity_type: Tools,
-}
-
-fn enact_interaction(mut interaction: ResMut<InteractionHistory>) {
+fn enact_interaction(
+    mut interaction: ResMut<InteractionHistory>,
+    handle_map: ResMut<HandleMaterialMap>,
+    mut commands: Commands,
+    window: Res<Windows>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
     if interaction.is_changed() {
+
+        if let Some(Right(ActionTaken)) = interaction.history.last() {
+            info!("Did an action.");
+        }
+
+
+        // In the case that the last interaction was not actually an action taken. In which case we don't want to take any action.
         if let Some(Left((Some((entity, entity_type)), interacting_tool))) =
             interaction.history.last()
         {
             let mut entity_tool_interaction = (entity_type, interacting_tool);
             // The tool interacted with an entity... let's figure out what action to take... The main interaction will be placing an edge between two nodes if the last and second to last interactions were both acting on nodes with the edge
 
+            let mut second_to_last_interaction_history: Option<
+                &Either<(Option<(Entity, EntityType)>, Tools), ActionTaken>,
+            > = None;
+
+            if interaction.history.len() >= 2 {
+                let second_to_last_index = interaction.history.len() - 2;
+                second_to_last_interaction_history = interaction.history.get(second_to_last_index);
+            }
+
+            let mut second_to_last_entity_tool_interaction: Option<(&Entity, &EntityType, &Tools)> =
+                None;
+
+            if let Some(Left((Some((entity, entity_type)), interacting_tool))) =
+                second_to_last_interaction_history
+            {
+                second_to_last_entity_tool_interaction =
+                    Some((entity, entity_type, interacting_tool));
+            }
+
             match entity_tool_interaction {
                 (Tools::Selector, _) => {
                     // nothing to be done, there is no entity type associated with the selector tool
                 }
-                (Tools::Node, Tools::Selector) => {}
-                (Tools::Node, Tools::Node) => todo!(),
-                (Tools::Node, Tools::Edge) => todo!(),
+                (Tools::Node, Tools::Selector) => {
+                    info!("Bring up the node on the info window")
+                }
+                (Tools::Node, Tools::Node) => {
+                    info!("The intent is probably to bring up an info panel of the node clicked")
+                }
+                (Tools::Node, Tools::Edge) => {
+                    // This is the case in which an edge is being added to a node. We need to determine if the second to last interaction was the node tool interacting with a *different* node than the last node.
+                    if let Some((last_entity, EntityType::Node, Tools::Edge)) =
+                        second_to_last_entity_tool_interaction
+                    {
+                        if *entity != *last_entity {
+                            info!("should add a node between the two entities here... Let's see if this even compiles.");
+                            // I don't think that this actually triggers the interaction resource to be noted as changed since it is happening in this system itself (instead of in an external one... I still think it's important to register this though.)
+                            interaction.history.push(Right(ActionTaken));
+                        }
+                    }
+                }
                 (Tools::Edge, Tools::Selector) => todo!(),
                 (Tools::Edge, Tools::Node) => todo!(),
                 (Tools::Edge, Tools::Edge) => todo!(),
             }
         }
+        if let Some(Left((None, interacting_tool))) = interaction.history.last() {
+            // This is the case in which no component is selected but a tool is being used essentially on empty space
+            match interacting_tool {
+                Tools::Selector => {}
+                Tools::Node => place_icon(interacting_tool.clone(), handle_map, commands, window, meshes),
+                Tools::Edge => {}
+            }
+        }
     }
-}
-
-pub fn main() {
-    let mut app = App::build();
-
-    app.add_plugins(bevy::DefaultPlugins)
-        .add_plugin(WorldInspectorPlugin::new())
-        .add_plugin(EguiPlugin)
-        .add_plugin(BoundingVolumePlugin::<sphere::BSphere>::default())
-        // .add_plugin(BoundingVolumePlugin::<obb::Obb>::default())
-        .insert_resource(ToolHistory {
-            current_tool: Tools::Selector,
-            last_tool: None,
-        })
-        .insert_resource(InteractionHistory {
-            history: Vec::new(),
-        })
-        // .insert_resource(LastClickedEntity(None))
-        .add_startup_system(setup.system())
-        .add_system(change_cursor_position.system())
-        .add_system(tool_menu.system())
-        .add_system(change_tool.system())
-        .add_system(check_what_is_clicked.system());
-
-    // when building for Web, use WebGL2 rendering
-    #[cfg(target_arch = "wasm32")]
-    app.add_plugin(bevy_webgl2::WebGL2Plugin);
-
-    app.run();
 }
 
 fn place_icon(
@@ -227,7 +284,7 @@ fn check_what_is_clicked(
     handle_map: ResMut<HandleMaterialMap>,
     tool_history: ResMut<ToolHistory>,
     meshes: ResMut<Assets<Mesh>>,
-    mut last_entity: ResMut<LastClickedEntity>,
+
     mut interaction_history: ResMut<InteractionHistory>,
 ) {
     if buttons.just_pressed(MouseButton::Left) {
@@ -253,20 +310,20 @@ fn check_what_is_clicked(
                         // If we are inside the bound of the placed entity
                         if mouse_position.distance(placed_position) < *mesh_radius {
                             info!("I should select the icon here. It is represented by the entity {:?}", entity);
-                            *last_entity = LastClickedEntity(Some(entity.clone()));
-                            interaction_history.history.push((
-                                Some(entity.clone(), placed.entity_type),
+
+                            interaction_history.history.push(Left((
+                                Some((entity.clone(), placed.entity_type.clone())),
                                 current_tool.clone(),
-                            ));
+                            )));
                             // we do not want to potentially register clicking two entities at the same time. If we accidentally click on two bounding boxes at the same time (where they overlap), then we need to break this loop
                             return;
                         }
                     }
                 }
-                // This means that nothing interesting has been clicked... We should still register nothing being clicked. As, for instance, there is significance of nothing being clicked by `Tools::Selector`. That is, if some tool is currently selected, then it should be unselected if nothing is clicked afterwards.
+                // This means that no entity has been clicked, nor has the egui interface... So... if the tool is a `Tools::Node` we should place a node
                 interaction_history
                     .history
-                    .push((None, current_tool.clone()));
+                    .push(Left((None, current_tool.clone())));
             }
         }
     }
@@ -301,7 +358,7 @@ fn setup(
             },
             ..Default::default()
         })
-        .insert(Icon {
+        .insert(Cursor {
             current_tool: Tools::Selector,
         });
 

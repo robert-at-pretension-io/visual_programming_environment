@@ -39,3 +39,4 @@ A way to visualize rust projects. Lays the groundwork for encapsulating architec
 | Move the nodes when they are click/dragged with the 'empty' selector tool |   self explanatory |    |
 | lines representing edges | the edges need to have a rudimentary visual representation |    |
 | Add a information panel for selected items | When a node or an edge is selected, we can add that entity's information to the panel so that it can be edited/displayed easily. This might be preferable to clicking when the graph structure becomes very complex. |   |
+| separate adding/removing to the shared graph resource | Instead of adding nodes directly when a tool is used, they should be added to a graph structure when the tool is used, and a separate system should be in charge of *drawing* the graph structure |   |
