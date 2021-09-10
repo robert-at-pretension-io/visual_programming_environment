@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContext, EguiPlugin, EguiSettings};
 use either::Either;
-use petgraph::graph::UnGraph;
+use petgraph::stable_graph::StableGraph;
 use strum::IntoEnumIterator; // 0.17.1
 use strum_macros::EnumIter;
 use uuid::Uuid; // 0.17.1
@@ -37,18 +37,30 @@ struct HandleMaterialMap {
 struct Node {
     identity: uuid::Uuid,
     label: String,
+    position: Position
+}
+enum GraphInteraction {
+    AddedNode(NodeIndex),
+    AddedEdge(EdgeIndex),
+    RemovedNode(NodeIndex),
+    RemovedEdge(EdgeIndex),
 }
 
-impl Node {
-    fn new() -> Self {
-        Node {
-            identity: Uuid::new_v4(),
-            label: String::from("My First Node!"),
-        }
-    }
+struct GraphInteractionHistory(Vec<GraphInteraction>);
+
+
+
+struct Edge {
+    node_a : uuid::Uuid,
+    node_b : uuid::Uuid
 }
 
-struct Graph(UnGraph<Node, ()>);
+
+use std::sync::Arc;
+
+struct Graph(StableGraph<Arc<Node>, Edge>);
+
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
 enum Tools {
@@ -97,6 +109,10 @@ pub fn main() {
         // .insert_resource(LastClickedEntity(None))
         .add_startup_system(setup.system())
         .add_system(change_cursor_position.system())
+        .add_resource(Graph(
+            StableGraph::new(),
+            
+        ))
         .add_system(tool_menu.system())
         .add_system(change_tool.system())
         .add_system(check_what_is_clicked.system())
@@ -169,7 +185,10 @@ fn enact_interaction(
     handle_map: ResMut<HandleMaterialMap>,
     mut commands: Commands,
     window: Res<Windows>,
+    query : Q
     mut meshes: ResMut<Assets<Mesh>>,
+    mut graph : ResMut<Graph>,
+    mut graph_interaction_history : ResMut<GraphInteractionHistory>
 ) {
     if interaction.is_changed() {
 
@@ -222,20 +241,57 @@ fn enact_interaction(
                         if *entity != *last_entity {
                             info!("should add a node between the two entities here... Let's see if this even compiles.");
                             // I don't think that this actually triggers the interaction resource to be noted as changed since it is happening in this system itself (instead of in an external one... I still think it's important to register this though.)
+                            graph.0.add_edge(weight);
+                            graph_interaction_history.0.insert(GraphInteraction::AddedEdge())
+
+
                             interaction.history.push(Right(ActionTaken));
                         }
                     }
                 }
-                (Tools::Edge, Tools::Selector) => todo!(),
-                (Tools::Edge, Tools::Node) => todo!(),
-                (Tools::Edge, Tools::Edge) => todo!(),
+                (Tools::Edge, Tools::Selector) => {
+                    info!("bring up this edge in the info panel, highlight the connector that was clicked")
+                },
+                (Tools::Edge, Tools::Node) => 
+                {
+                    // This interaction doesn't make sense. Why would someone click a placed edge with the Node tool?
+                },
+                (Tools::Edge, Tools::Edge) => 
+                {
+                    info!("bring up the info panel containing the information about the edge")
+                },
             }
         }
         if let Some(Left((None, interacting_tool))) = interaction.history.last() {
             // This is the case in which no component is selected but a tool is being used essentially on empty space
             match interacting_tool {
                 Tools::Selector => {}
-                Tools::Node => place_icon(interacting_tool.clone(), handle_map, commands, window, meshes),
+                Tools::Node => {
+
+                    if let Some(windows) = window.get_primary(){
+                        if let Some(position) = windows.cursor_position(){
+                            let x = position.x();
+                            let y = position.y();
+                            
+                            let mut node = Arc::new(Node{
+                                identity: Uuid::new_v4(),
+                                label: String::from(Uuid::new_v4()),
+                                position: Position { x, y, z: 0.0 }
+                            });
+                            let index = graph.0.add_node(node);
+        
+                            //last_added_node = Some(index);
+
+                            let interaction = GraphInteraction::AddedNode(index);
+
+                            graph_interaction_history.0.insert(interaction);
+        
+                            
+                        }
+
+                    }
+
+                   },
                 Tools::Edge => {}
             }
         }

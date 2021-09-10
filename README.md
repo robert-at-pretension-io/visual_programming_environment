@@ -34,6 +34,7 @@ A way to visualize rust projects. Lays the groundwork for encapsulating architec
 | Give the tools functionality | While it's nice that tools show up on the screen, they should actually do something. | :heavy_check_mark: |
 | Determine what mouse-click hitting | Since there are theoretically many different tools available, the screen will one day be filled with different entities -- all of which will have different methods of interaction. So, it'll be important to differentiate what is being clicked... | :heavy_check_mark: |
 | (Tool, ClickedComponent) functionality |  Each unique (Tool, ClickedComponent) tuple could have different functionality, the functionality given to each should be easy to specify. | *in progress* | 
+| Add graph structure | This will be the data type that stores most of the useful parts of the app |    |
 | Add a information panel for selected items | When a node or an edge is selected, we can add that entity's information to the panel so that it can be edited/displayed easily. This might be preferable to clicking when the graph structure becomes very complex. |   |
 | Make the edge tool have a visual component | Right now, there's no clear differentiator between a node and an edge |    |
 | Change the bounding box to a rectangle |  When the nodes change size, it will make a lot more sense to have bounding boxes instead of circles since the circular clickbox will potentially be huge for long rectangle nodes |    |
