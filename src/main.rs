@@ -35,7 +35,6 @@ struct HandleMaterialMap {
 }
 
 struct Node {
-    identity: uuid::Uuid,
     label: String,
     position: Position
 }
@@ -51,8 +50,8 @@ struct GraphInteractionHistory(Vec<GraphInteraction>);
 
 
 struct Edge {
-    node_a : uuid::Uuid,
-    node_b : uuid::Uuid
+    node_a : NodeIndex,
+    node_b : NodeIndex
 }
 
 
@@ -293,6 +292,20 @@ fn enact_interaction(
 
                    },
                 Tools::Edge => {}
+            }
+        }
+    }
+}
+
+
+fn visualize_graph(graph : ResMut<Graph>, graph_history : GraphInteractionHistory) {
+    if graph.is_changed() {
+        if let Some(last_interaction) = graph_history.0.last(){
+            match last_interaction {
+                GraphInteraction::AddedNode(_) => todo!(),
+                GraphInteraction::AddedEdge(_) => todo!(),
+                GraphInteraction::RemovedNode(_) => todo!(),
+                GraphInteraction::RemovedEdge(_) => todo!(),
             }
         }
     }
