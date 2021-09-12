@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use bevy_inspector_egui::WorldInspectorPlugin;
 use bevy_mod_bounding::{debug, sphere::BSphere, *};
+use petgraph::stable_graph::NodeIndex;
 
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::*;
@@ -21,7 +22,7 @@ struct Cursor {
     current_tool: Tools,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Position {
     x: f32,
     y: f32,
@@ -34,21 +35,23 @@ struct HandleMaterialMap {
     height: f32,
 }
 
+#[derive(Clone)]
 struct Node {
     label: String,
-    position: Position
+    position: Position,
+    identity: Option<NodeIndex>
 }
 enum GraphInteraction {
-    AddedNode(NodeIndex),
-    AddedEdge(EdgeIndex),
-    RemovedNode(NodeIndex),
-    RemovedEdge(EdgeIndex),
+    AddedNode(Node),
+    AddedEdge(Edge),
+    RemovedNode(Node),
+    RemovedEdge(Edge),
 }
 
 struct GraphInteractionHistory(Vec<GraphInteraction>);
 
 
-
+#[derive(Clone)]
 struct Edge {
     node_a : NodeIndex,
     node_b : NodeIndex
@@ -57,7 +60,7 @@ struct Edge {
 
 use std::sync::Arc;
 
-struct Graph(StableGraph<Arc<Node>, Edge>);
+struct Graph(StableGraph<Node, Edge>);
 
 
 
@@ -105,10 +108,12 @@ pub fn main() {
         .insert_resource(InteractionHistory {
             history: Vec::new(),
         })
+        .insert_resource(GraphInteractionHistory(Vec::new()))
         // .insert_resource(LastClickedEntity(None))
         .add_startup_system(setup.system())
+        .add_system(visualize_graph.system())
         .add_system(change_cursor_position.system())
-        .add_resource(Graph(
+        .insert_resource(Graph(
             StableGraph::new(),
             
         ))
@@ -149,13 +154,20 @@ fn change_tool(
     // info!("The change_tool system has been triggered.");
 }
 
-fn adjust_cursor_position(window: &Res<Windows>) -> Option<(f32, f32)> {
+fn adjust_cursor_position(window: &ResMut<Windows>, optional_position : Option<Position>) -> Option<(f32, f32)> {
     let window = window.get_primary().unwrap();
 
     let mut adjust_x: f32 = window.width() / 2.0;
     let adjust_y = window.height() / 2.0;
 
-    if let Some(position) = window.cursor_position() {
+    if let Some(position) = optional_position {
+        let mut x = position.x;
+        let mut y = position.y;
+        x = x - adjust_x;
+        y = y - adjust_y;
+        return Some((x, y));
+    }
+    else if let Some(position) = window.cursor_position() {
         let mut x = position.x;
         let mut y = position.y;
         x = x - adjust_x;
@@ -166,11 +178,11 @@ fn adjust_cursor_position(window: &Res<Windows>) -> Option<(f32, f32)> {
 }
 
 //bevy::math::f32::Vec3
-fn change_cursor_position(windows: Res<Windows>, mut query: Query<(&Cursor, &mut Transform)>) {
+fn change_cursor_position(windows: ResMut<Windows>, mut query: Query<(&Cursor, &mut Transform)>) {
     for (_potential_node, mut transform) in query.iter_mut() {
         // If the node is already existing on the screen somewhere, we should transform it to the position of the mouse! Instead of iterating through... There should only be one potential node on the screen at once.
 
-        if let Some((x, y)) = adjust_cursor_position(&windows) {
+        if let Some((x, y)) = adjust_cursor_position(&windows, None) {
             // info!("The cursor is at the postion: x: {}, y: {}",x,y);
             // Update the position of the sprite
             transform.translation.x = x;
@@ -183,8 +195,8 @@ fn enact_interaction(
     mut interaction: ResMut<InteractionHistory>,
     handle_map: ResMut<HandleMaterialMap>,
     mut commands: Commands,
-    window: Res<Windows>,
-    query : Q
+    window: ResMut<Windows>,
+    node_query : Query<(Entity,&Node)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut graph : ResMut<Graph>,
     mut graph_interaction_history : ResMut<GraphInteractionHistory>
@@ -240,8 +252,30 @@ fn enact_interaction(
                         if *entity != *last_entity {
                             info!("should add a node between the two entities here... Let's see if this even compiles.");
                             // I don't think that this actually triggers the interaction resource to be noted as changed since it is happening in this system itself (instead of in an external one... I still think it's important to register this though.)
-                            graph.0.add_edge(weight);
-                            graph_interaction_history.0.insert(GraphInteraction::AddedEdge())
+                            let mut node_a : Option<Node> = None;
+                            let mut node_b : Option<Node> = None;
+
+                            for (check_entity, node) in node_query.iter() {
+                                if check_entity == *entity {
+                                    node_b = Some(node.clone());
+                                }
+                                if check_entity == *last_entity {
+                                    node_a = Some(node.clone());
+                                }
+                            }
+
+                            if node_b.is_some() && node_a.is_some() {
+                                let node_index_a = node_a.unwrap().identity.unwrap();
+                                let node_index_b = node_b.unwrap().identity.unwrap();
+                                
+                                let weight = Edge{
+                                    node_a: node_index_a,
+                                    node_b : node_index_b
+                                };
+                                graph.0.add_edge(node_index_a, node_index_b, weight.clone());
+                                graph_interaction_history.0.push(GraphInteraction::AddedEdge(weight.clone()))
+                            }
+                            
 
 
                             interaction.history.push(Right(ActionTaken));
@@ -267,28 +301,30 @@ fn enact_interaction(
                 Tools::Selector => {}
                 Tools::Node => {
 
-                    if let Some(windows) = window.get_primary(){
-                        if let Some(position) = windows.cursor_position(){
-                            let x = position.x();
-                            let y = position.y();
-                            
-                            let mut node = Arc::new(Node{
-                                identity: Uuid::new_v4(),
-                                label: String::from(Uuid::new_v4()),
+                    if let Some((x,y)) = adjust_cursor_position(&window, None) {
+
+                    
+                            let mut node = Node{
+                                identity: None,
+                                label: String::from(""),
                                 position: Position { x, y, z: 0.0 }
-                            });
-                            let index = graph.0.add_node(node);
+                            };
+                            let index = graph.0.add_node(node.clone());
         
-                            //last_added_node = Some(index);
+                            if let Some(node_weight) = graph.0.node_weight_mut(index.clone()) {
+                                node_weight.identity = Some(index);
+                                info!("updated the node weight... This is ideal.")
+                            }
+                            
+                            // node.identity = Some(index.clone());
 
-                            let interaction = GraphInteraction::AddedNode(index);
+                            let interaction = GraphInteraction::AddedNode(node.clone());
 
-                            graph_interaction_history.0.insert(interaction);
+                            graph_interaction_history.0.push(interaction);
+                        }
         
                             
-                        }
-
-                    }
+                     
 
                    },
                 Tools::Edge => {}
@@ -298,29 +334,40 @@ fn enact_interaction(
 }
 
 
-fn visualize_graph(graph : ResMut<Graph>, graph_history : GraphInteractionHistory) {
-    if graph.is_changed() {
+fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphInteractionHistory>, handle_map : ResMut<HandleMaterialMap>, commands : Commands, meshes: ResMut<Assets<Mesh>>, window : ResMut<Windows>) {
+    if graph.is_changed() || graph_history.is_changed() {
+        info!("graph history changed");
         if let Some(last_interaction) = graph_history.0.last(){
+
             match last_interaction {
-                GraphInteraction::AddedNode(_) => todo!(),
+                GraphInteraction::AddedNode(node) => {
+                    if let Some((x,y)) = adjust_cursor_position(&window, Some(node.position.clone())){
+                    place_icon(Tools::Node,node.position.clone() ,handle_map, commands, meshes, window);   
+                    }
+                },
                 GraphInteraction::AddedEdge(_) => todo!(),
                 GraphInteraction::RemovedNode(_) => todo!(),
                 GraphInteraction::RemovedEdge(_) => todo!(),
             }
+            info!("should have changed SOMETHING about the graph");
         }
     }
 }
 
 fn place_icon(
     current_tool: Tools,
+    position : Position,
     handle_map: ResMut<HandleMaterialMap>,
     mut commands: Commands,
-    window: Res<Windows>,
     mut meshes: ResMut<Assets<Mesh>>,
+    window : ResMut<Windows>,
 ) {
+
     if let Some(material) = handle_map.tools.get(&current_tool.clone()) {
-        if let Some((x, y)) = adjust_cursor_position(&window) {
-            info!("Should be placing {:?} at {} {}", current_tool, x, y);
+        let x = position.x;
+        let y = position.y;
+        let z : f32 = 0.0;
+        info!("Placing the {:?} at {:?}", current_tool, position);
             commands
                 .spawn_bundle(PbrBundle {
                     visible: Visible {
@@ -331,16 +378,16 @@ fn place_icon(
                         size: handle_map.length,
                     })),
                     material: material.clone().to_owned(),
-                    transform: Transform::from_xyz(x.clone(), y.clone(), 0.0),
+                    transform: Transform::from_xyz(x.clone(), y.clone(), z),
                     ..Default::default()
                 })
                 .insert(Placed {
-                    position: Position { x, y, z: 0.0 },
+                    position: position,
                     entity_type: current_tool.clone(),
                 })
                 .insert(Bounded::<sphere::BSphere>::default())
                 .insert(debug::DebugBounds);
-        }
+        
     }
 }
 
@@ -348,7 +395,7 @@ fn check_what_is_clicked(
     egui_context: ResMut<EguiContext>,
     buttons: Res<Input<MouseButton>>,
     query: Query<(Entity, &Placed, &BSphere)>,
-    window: Res<Windows>,
+    window: ResMut<Windows>,
     commands: Commands,
     handle_map: ResMut<HandleMaterialMap>,
     tool_history: ResMut<ToolHistory>,
@@ -367,7 +414,7 @@ fn check_what_is_clicked(
                 let current_tool = tool_history.current_tool.clone();
 
                 for (entity, placed, bounded) in query.iter() {
-                    if let Some(cursor) = adjust_cursor_position(&window) {
+                    if let Some(cursor) = adjust_cursor_position(&window, None) {
                         // info!("mouse info: {:?}\nbounded info: {:?}\nplaced info: {:?}", cursor, bounded, placed);
 
                         let mesh_radius = bounded.mesh_space_radius();
