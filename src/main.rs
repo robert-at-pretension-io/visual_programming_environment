@@ -13,7 +13,9 @@ use std::collections::HashMap;
 
 use bevy_inspector_egui::WorldInspectorPlugin;
 use bevy_mod_bounding::{debug, sphere::BSphere, *};
-use petgraph::stable_graph::NodeIndex;
+use petgraph::stable_graph::{NodeIndex, EdgeIndex};
+
+use bevy_prototype_lyon::{prelude::*, shapes, geometry::{GeometryBuilder, Geometry}};
 
 #[cfg(target_arch = "wasm32")]
 use bevy_webgl2::*;
@@ -37,30 +39,42 @@ struct HandleMaterialMap {
 
 #[derive(Clone)]
 struct Node {
-    label: String,
-    position: Position,
-    identity: Option<NodeIndex>
+    identity: Entity
 }
-enum GraphInteraction {
+enum BevyInteraction {
     AddedNode(Node),
     AddedEdge(Edge),
     RemovedNode(Node),
     RemovedEdge(Edge),
 }
 
-struct GraphInteractionHistory(Vec<GraphInteraction>);
+enum AbstractionLevel {
+    /// Refers to keyboard clicks or button press combinations
+    InputLevel,
+    /// Refers to Bevy::Entity level of abstraction. These are the primary identity reference
+    BevyLevel,
+    /// In this abstraction boundary, we handle all of the system level objects. Ownership of the objects are assumed to be local. That is, until messages are sent to the `AbstractionLevel::NetworkLevel`, there should be no expectation that these objects affect any other sibling application on the network
+    SystemStateLevel,
+    /// This level abstraction will send messages between this application on this computer and other applications on the network. Authentication and authorization must be addressed on this layer... Perhaps adding a sublayer?
+    NetworkLevel
+}
+trait ApplicationInteraction {
+    fn set_level(level : AbstractionLevel);
+
+}
+struct GraphInteractionHistory(Vec<dyn ApplicationInteraction>);
 
 
 #[derive(Clone)]
 struct Edge {
-    node_a : NodeIndex,
-    node_b : NodeIndex
+    node_a : Entity,
+    node_b : Entity
 }
 
 
 use std::sync::Arc;
 
-struct Graph(StableGraph<Node, Edge>);
+struct Graph(StableGraph<(), ()>);
 
 
 
@@ -93,6 +107,9 @@ struct Placed {
     entity_type: Tools,
 }
 
+struct EntityGraphIndexTuples(Vec<(Entity, Either<EdgeIndex,NodeIndex>)>);
+
+
 pub fn main() {
     let mut app = App::build();
 
@@ -108,6 +125,7 @@ pub fn main() {
         .insert_resource(InteractionHistory {
             history: Vec::new(),
         })
+        .insert_resource(EntityGraphIndexTuples(Vec::new()))
         .insert_resource(GraphInteractionHistory(Vec::new()))
         // .insert_resource(LastClickedEntity(None))
         .add_startup_system(setup.system())
@@ -250,12 +268,14 @@ fn enact_interaction(
                         second_to_last_entity_tool_interaction
                     {
                         if *entity != *last_entity {
-                            info!("should add a node between the two entities here... Let's see if this even compiles.");
+                            info!("should add an edge between the two entities here.");
                             // I don't think that this actually triggers the interaction resource to be noted as changed since it is happening in this system itself (instead of in an external one... I still think it's important to register this though.)
                             let mut node_a : Option<Node> = None;
                             let mut node_b : Option<Node> = None;
 
                             for (check_entity, node) in node_query.iter() {
+                                info!("checking if {:?} is either {:?} or {:?}", check_entity, *entity, *last_entity);
+                                
                                 if check_entity == *entity {
                                     node_b = Some(node.clone());
                                 }
@@ -264,17 +284,23 @@ fn enact_interaction(
                                 }
                             }
 
-                            if node_b.is_some() && node_a.is_some() {
-                                let node_index_a = node_a.unwrap().identity.unwrap();
-                                let node_index_b = node_b.unwrap().identity.unwrap();
+                            // if node_b.is_some() && node_a.is_some() {
+                            //     let node_index_a = node_a.unwrap().identity.unwrap();
+                            //     let node_index_b = node_b.unwrap().identity.unwrap();
                                 
-                                let weight = Edge{
-                                    node_a: node_index_a,
-                                    node_b : node_index_b
-                                };
-                                graph.0.add_edge(node_index_a, node_index_b, weight.clone());
-                                graph_interaction_history.0.push(GraphInteraction::AddedEdge(weight.clone()))
-                            }
+                            //     let mut weight = Edge{
+                            //         node_a: node_index_a,
+                            //         node_b : node_index_b,
+                            //         graph_identity: None,
+                            //         bevy_identity: None,
+                            //     };
+                                // let edge = graph.0.add_edge(node_index_a, node_index_b, weight.clone());
+
+                                //TODO: d
+
+                                // weight.graph_identity = Some(edge);
+                                graph_interaction_history.0.push(GraphInteraction::AddedEdge(edge));
+                                
                             
 
 
@@ -334,7 +360,7 @@ fn enact_interaction(
 }
 
 
-fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphInteractionHistory>, handle_map : ResMut<HandleMaterialMap>, commands : Commands, meshes: ResMut<Assets<Mesh>>, window : ResMut<Windows>) {
+fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphInteractionHistory>, handle_map : ResMut<HandleMaterialMap>, mut commands : Commands, meshes: ResMut<Assets<Mesh>>, window : ResMut<Windows>) {
     if graph.is_changed() || graph_history.is_changed() {
         info!("graph history changed");
         if let Some(last_interaction) = graph_history.0.last(){
@@ -342,10 +368,25 @@ fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphIntera
             match last_interaction {
                 GraphInteraction::AddedNode(node) => {
                     if let Some((x,y)) = adjust_cursor_position(&window, Some(node.position.clone())){
-                    place_icon(Tools::Node,node.position.clone() ,handle_map, commands, meshes, window);   
+                    place_node(Tools::Node,node.position.clone() ,handle_map, commands, meshes, window);   
                     }
                 },
-                GraphInteraction::AddedEdge(_) => todo!(),
+                GraphInteraction::AddedEdge(edge) => {
+                    let index_a = edge.node_a;
+                    let index_b = edge.node_b;
+                    
+                    let mut node_a = graph.0.node_weight(index_a);
+                    let mut node_b = graph.0.node_weight(index_b);
+
+                    if node_a.is_some() && node_b.is_some() {
+                        let unwraped_a = node_a.unwrap();
+                        let unwraped_b = node_b.unwrap();
+                        let position_a = unwraped_a.position.clone();
+                        let position_b = unwraped_b.position.clone();
+                        draw_edge(&mut commands, position_a, position_b, graph_history, graph);
+                        
+                    }
+                },
                 GraphInteraction::RemovedNode(_) => todo!(),
                 GraphInteraction::RemovedEdge(_) => todo!(),
             }
@@ -354,7 +395,34 @@ fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphIntera
     }
 }
 
-fn place_icon(
+fn draw_edge(commands: &mut Commands, position_a : Position, position_b : Position, mut graph_interaction_history : ResMut<GraphInteractionHistory>, mut graph : ResMut<Graph>) {
+    info!("Attempting to draw edge...");
+    let a = Vec2::new(position_a.x, position_a.y);
+    let b = Vec2::new(position_b.x, position_b.y);
+    
+    let line = shapes::Line(a, b);
+    let entity = commands.spawn_bundle(GeometryBuilder::build_as(
+        &line,
+        ShapeColors::new(Color::ORANGE_RED),
+        DrawMode::Fill(FillOptions::default()),
+        Transform::from_xyz(0.0, 0.0, -1.0)
+    ));
+
+    if let Some(interaction) = graph_interaction_history.0.last() {
+        match interaction {
+            
+            GraphInteraction::AddedEdge(edge) => {
+                if let Some(identity) =  edge.graph_identity {
+                    if let Some(mut edge) = graph.0.edge_weight_mut(identity){
+                    edge.bevy_identity = Some(entity.id().clone());
+                    }
+                }
+            },
+            _ => info!("The last graph interaction should be an edge... this is probably an error")
+        }
+    }
+}
+fn place_node(
     current_tool: Tools,
     position : Position,
     handle_map: ResMut<HandleMaterialMap>,
@@ -382,11 +450,16 @@ fn place_icon(
                     ..Default::default()
                 })
                 .insert(Placed {
-                    position: position,
+                    position: position.clone(),
                     entity_type: current_tool.clone(),
                 })
                 .insert(Bounded::<sphere::BSphere>::default())
-                .insert(debug::DebugBounds);
+                .insert(debug::DebugBounds)
+                .insert(Node{
+                    label: String::from(""),
+                    position,
+                    identity: None,
+                });
         
     }
 }

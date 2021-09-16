@@ -35,6 +35,7 @@ strum_macros = "0.21.1"
 bevy_mod_bounding = "0.1.1"
 either = "1.6.1"
 bevy-inspector-egui = "0.6.1"
+bevy_prototype_lyon = "0.3.1"
 
 # [patch.'https://github.com/bevyengine/bevy']
 # bevy = {git = "https://github.com/bevyengine/bevy//", rev="841755aaf23acfd55b375c37390daeb302c5b30b", default-features=false}
