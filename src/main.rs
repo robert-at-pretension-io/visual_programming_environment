@@ -39,36 +39,28 @@ struct HandleMaterialMap {
 
 #[derive(Clone)]
 struct Node {
-    identity: Entity
 }
-enum BevyInteraction {
-    AddedNode(Node),
-    AddedEdge(Edge),
-    RemovedNode(Node),
-    RemovedEdge(Edge),
+enum Interaction {
+    AddedNode(Entity),
+    /// The first two entries in the truple are node_a and node_b respectively
+    AddedEdge(NodeA, NodeB, Entity),
+    RemovedNode(Entity),
+    RemovedEdge(Entity),
 }
+#[derive(Clone)]
+struct NodeA(Entity);
 
-enum AbstractionLevel {
-    /// Refers to keyboard clicks or button press combinations
-    InputLevel,
-    /// Refers to Bevy::Entity level of abstraction. These are the primary identity reference
-    BevyLevel,
-    /// In this abstraction boundary, we handle all of the system level objects. Ownership of the objects are assumed to be local. That is, until messages are sent to the `AbstractionLevel::NetworkLevel`, there should be no expectation that these objects affect any other sibling application on the network
-    SystemStateLevel,
-    /// This level abstraction will send messages between this application on this computer and other applications on the network. Authentication and authorization must be addressed on this layer... Perhaps adding a sublayer?
-    NetworkLevel
-}
-trait ApplicationInteraction {
-    fn set_level(level : AbstractionLevel);
+#[derive(Clone)]
+struct NodeB(Entity);
 
-}
-struct GraphInteractionHistory(Vec<dyn ApplicationInteraction>);
+
+
+
+struct GraphInteractionHistory(Vec<Interaction>);
 
 
 #[derive(Clone)]
 struct Edge {
-    node_a : Entity,
-    node_b : Entity
 }
 
 
@@ -125,11 +117,10 @@ pub fn main() {
         .insert_resource(InteractionHistory {
             history: Vec::new(),
         })
-        .insert_resource(EntityGraphIndexTuples(Vec::new()))
         .insert_resource(GraphInteractionHistory(Vec::new()))
         // .insert_resource(LastClickedEntity(None))
         .add_startup_system(setup.system())
-        .add_system(visualize_graph.system())
+        // .add_system(visualize_graph.system())
         .add_system(change_cursor_position.system())
         .insert_resource(Graph(
             StableGraph::new(),
@@ -212,11 +203,11 @@ fn change_cursor_position(windows: ResMut<Windows>, mut query: Query<(&Cursor, &
 fn enact_interaction(
     mut interaction: ResMut<InteractionHistory>,
     handle_map: ResMut<HandleMaterialMap>,
-    mut commands: Commands,
+    commands: Commands,
     window: ResMut<Windows>,
-    node_query : Query<(Entity,&Node)>,
+    node_query : Query<(Entity,&Node, &Position)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut graph : ResMut<Graph>,
+    // mut graph : ResMut<Graph>,
     mut graph_interaction_history : ResMut<GraphInteractionHistory>
 ) {
     if interaction.is_changed() {
@@ -270,21 +261,25 @@ fn enact_interaction(
                         if *entity != *last_entity {
                             info!("should add an edge between the two entities here.");
                             // I don't think that this actually triggers the interaction resource to be noted as changed since it is happening in this system itself (instead of in an external one... I still think it's important to register this though.)
-                            let mut node_a : Option<Node> = None;
-                            let mut node_b : Option<Node> = None;
+                            let mut node_a : Option<(NodeA, Node, Position)> = None;
+                            let mut node_b : Option<(NodeB, Node, Position)> = None;
 
-                            for (check_entity, node) in node_query.iter() {
+                            for (check_entity, node, position) in node_query.iter() {
                                 info!("checking if {:?} is either {:?} or {:?}", check_entity, *entity, *last_entity);
                                 
                                 if check_entity == *entity {
-                                    node_b = Some(node.clone());
+                                    node_b = Some((NodeB(entity.clone()),node.clone(), position.clone()));
                                 }
                                 if check_entity == *last_entity {
-                                    node_a = Some(node.clone());
+                                    node_a = Some((NodeA(last_entity.clone()), node.clone(), position.clone()));
                                 }
                             }
 
-                            // if node_b.is_some() && node_a.is_some() {
+                            let edge_entity : Option<Entity> = None;
+
+                            if node_b.is_some() && node_a.is_some() {
+                                edge_entity = Some(draw_edge(&commands, node_a.unwrap().2, node_b.unwrap().2));
+                            }
                             //     let node_index_a = node_a.unwrap().identity.unwrap();
                             //     let node_index_b = node_b.unwrap().identity.unwrap();
                                 
@@ -296,10 +291,14 @@ fn enact_interaction(
                             //     };
                                 // let edge = graph.0.add_edge(node_index_a, node_index_b, weight.clone());
 
-                                //TODO: d
 
                                 // weight.graph_identity = Some(edge);
-                                graph_interaction_history.0.push(GraphInteraction::AddedEdge(edge));
+                                if let Some(entity) = edge_entity {
+                                    let a = node_a.unwrap().0.clone();
+                                    let b = node_b.unwrap().0.clone();
+                                    graph_interaction_history.0.push(Interaction::AddedEdge(a,b,entity));
+                                }
+                                
                                 
                             
 
@@ -330,21 +329,17 @@ fn enact_interaction(
                     if let Some((x,y)) = adjust_cursor_position(&window, None) {
 
                     
-                            let mut node = Node{
-                                identity: None,
-                                label: String::from(""),
-                                position: Position { x, y, z: 0.0 }
-                            };
-                            let index = graph.0.add_node(node.clone());
+                        let entity = draw_node(Position{x,y,z: 0.0}, handle_map, &commands, meshes, window);
+                            // let index = graph.0.add_node(node.clone());
         
-                            if let Some(node_weight) = graph.0.node_weight_mut(index.clone()) {
-                                node_weight.identity = Some(index);
-                                info!("updated the node weight... This is ideal.")
-                            }
+                            // if let Some(node_weight) = graph.0.node_weight_mut(index.clone()) {
+                            //     node_weight.identity = Some(index);
+                            //     info!("updated the node weight... This is ideal.")
+                            // }
                             
                             // node.identity = Some(index.clone());
 
-                            let interaction = GraphInteraction::AddedNode(node.clone());
+                            let interaction = Interaction::AddedNode(entity);
 
                             graph_interaction_history.0.push(interaction);
                         }
@@ -360,83 +355,40 @@ fn enact_interaction(
 }
 
 
-fn visualize_graph(graph : ResMut<Graph>, mut graph_history : ResMut<GraphInteractionHistory>, handle_map : ResMut<HandleMaterialMap>, mut commands : Commands, meshes: ResMut<Assets<Mesh>>, window : ResMut<Windows>) {
-    if graph.is_changed() || graph_history.is_changed() {
-        info!("graph history changed");
-        if let Some(last_interaction) = graph_history.0.last(){
 
-            match last_interaction {
-                GraphInteraction::AddedNode(node) => {
-                    if let Some((x,y)) = adjust_cursor_position(&window, Some(node.position.clone())){
-                    place_node(Tools::Node,node.position.clone() ,handle_map, commands, meshes, window);   
-                    }
-                },
-                GraphInteraction::AddedEdge(edge) => {
-                    let index_a = edge.node_a;
-                    let index_b = edge.node_b;
-                    
-                    let mut node_a = graph.0.node_weight(index_a);
-                    let mut node_b = graph.0.node_weight(index_b);
 
-                    if node_a.is_some() && node_b.is_some() {
-                        let unwraped_a = node_a.unwrap();
-                        let unwraped_b = node_b.unwrap();
-                        let position_a = unwraped_a.position.clone();
-                        let position_b = unwraped_b.position.clone();
-                        draw_edge(&mut commands, position_a, position_b, graph_history, graph);
-                        
-                    }
-                },
-                GraphInteraction::RemovedNode(_) => todo!(),
-                GraphInteraction::RemovedEdge(_) => todo!(),
-            }
-            info!("should have changed SOMETHING about the graph");
-        }
-    }
-}
-
-fn draw_edge(commands: &mut Commands, position_a : Position, position_b : Position, mut graph_interaction_history : ResMut<GraphInteractionHistory>, mut graph : ResMut<Graph>) {
+fn draw_edge(commands:  &Commands, position_a : Position, position_b : Position) -> Entity{
     info!("Attempting to draw edge...");
     let a = Vec2::new(position_a.x, position_a.y);
     let b = Vec2::new(position_b.x, position_b.y);
     
     let line = shapes::Line(a, b);
-    let entity = commands.spawn_bundle(GeometryBuilder::build_as(
+    let mut entity = commands.spawn_bundle(GeometryBuilder::build_as(
         &line,
         ShapeColors::new(Color::ORANGE_RED),
         DrawMode::Fill(FillOptions::default()),
         Transform::from_xyz(0.0, 0.0, -1.0)
     ));
+    entity.insert(Edge{});
 
-    if let Some(interaction) = graph_interaction_history.0.last() {
-        match interaction {
-            
-            GraphInteraction::AddedEdge(edge) => {
-                if let Some(identity) =  edge.graph_identity {
-                    if let Some(mut edge) = graph.0.edge_weight_mut(identity){
-                    edge.bevy_identity = Some(entity.id().clone());
-                    }
-                }
-            },
-            _ => info!("The last graph interaction should be an edge... this is probably an error")
-        }
-    }
+    entity.id()
 }
-fn place_node(
-    current_tool: Tools,
+fn draw_node(
     position : Position,
     handle_map: ResMut<HandleMaterialMap>,
-    mut commands: Commands,
+    commands: &Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     window : ResMut<Windows>,
-) {
+) -> Entity{
+    
+    let entity : Option<Entity> = None;
 
-    if let Some(material) = handle_map.tools.get(&current_tool.clone()) {
+    if let Some(material) = handle_map.tools.get(&Tools::Node) {
         let x = position.x;
         let y = position.y;
         let z : f32 = 0.0;
-        info!("Placing the {:?} at {:?}", current_tool, position);
-            commands
+        info!("Placing the node at {:?}", position);
+            let node_entity = commands
                 .spawn_bundle(PbrBundle {
                     visible: Visible {
                         is_visible: true,
@@ -451,17 +403,22 @@ fn place_node(
                 })
                 .insert(Placed {
                     position: position.clone(),
-                    entity_type: current_tool.clone(),
+                    entity_type: Tools::Node.clone(),
                 })
                 .insert(Bounded::<sphere::BSphere>::default())
                 .insert(debug::DebugBounds)
                 .insert(Node{
-                    label: String::from(""),
-                    position,
-                    identity: None,
-                });
-        
+                    
+                })
+                .insert(Position {
+                    x,y,z
+                }).id();
+                let entity = Some(node_entity.clone());
+                return node_entity;
+
+                
     }
+    entity.unwrap()
 }
 
 fn check_what_is_clicked(
